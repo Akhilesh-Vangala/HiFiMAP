@@ -6,19 +6,15 @@ of materializing the whole chromosome's fired-site array.
 Key design point: batches here are the script's OWN arbitrary, runtime-
 configurable boundaries over the fired-site list -- NOT a re-adoption of
 Step 0's precomputed ibd_mat_<N>.mtx checkpoints. The diff chain itself
-is checkpoint-independent (confirmed on chr22 at all 20 of the R
-pipeline's real checkpoint boundaries, and on chr21 with a fresh local R
-run spanning its first real checkpoint boundary -- both 0 mismatches),
-so batching only needs to carry forward the tiny running (Q_curr, E_curr)
-state between batches, never a saved snapshot file.
+is checkpoint-independent, so batching only needs to carry forward the
+tiny running (Q_curr, E_curr) state between batches, never a saved
+snapshot file.
 
 Only the (batch_size, B, B) M array is held per batch; it's eigh'd then
 discarded. The only thing accumulated across the whole chromosome is the
-eigenvalues themselves (fired_sites x B -- e.g. chr21: 51,196 x 100 x 8
-bytes = 41MB, vs an unbatched run's full-chromosome M array for the same
-chromosome -- a factor of B=100x smaller, since eigenvalues are B numbers
-per site, not a BxB matrix), plus the n_ibd/fired-site-id bookkeeping,
-both negligible.
+eigenvalues themselves (fired_sites x B, not fired_sites x B x B, since
+eigenvalues are B numbers per site, not a BxB matrix), plus the
+n_ibd/fired-site-id bookkeeping, both negligible.
 
 Usage:
     python3 Step2_Run_HiFiMAP_GPU.py <chr> <ibd_out_dir> <step1_export_dir> [outfile] [batch_size]
@@ -234,10 +230,7 @@ lam0 = _eigvalsh(M0)
 # then each fired site's own eigenvalues) -- instead of once per position.
 # Most positions between two fired sites share the identical eigenvalues as
 # their neighbors (nothing changed there), the same reason n_ibd_per_site
-# above is already a simple lookup rather than recomputed per position. On
-# chr2: 1,769,036 positions but only 256,129 distinct states (256,128 fired
-# sites + lam0) -- recomputing per position was redoing the same work ~6.9x
-# more than needed.
+# above is already a simple lookup rather than recomputed per position.
 n_unique = len(lam_all) + 1
 pv_unique = [None] * n_unique
 lam0_z = pvalue.zapsmall(lam0 / B, digits=7)

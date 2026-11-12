@@ -5,10 +5,9 @@ returned in R, so this port never takes that shortcut either).
 
 Davies itself is not reimplemented in Python: q_pval calls the vendored C
 algorithm directly (davies.py, via ctypes) -- the identical compiled code
-CompQuadForm::davies calls in R, not a Python re-derivation of it -- so
-the p-value step is guaranteed identical while the matrix/eigen math
-(this module's actual target) is validated independently. Kuonen and Liu
-are ported below as fallbacks for cases Davies itself does not resolve.
+CompQuadForm::davies calls in R, not a Python re-derivation of it. Kuonen
+and Liu are ported below as fallbacks for cases Davies itself does not
+resolve.
 """
 import numpy as np
 from scipy.stats import ncx2
@@ -19,7 +18,7 @@ from . import davies as _davies
 def zapsmall(x, digits=7):
     """R's zapsmall(x, digits=7): nd = round(max(0, digits - log10(max(|x|)))),
     then round(x, nd). R rounds the digits argument to the nearest integer
-    before rounding x (verified against R: round(v, 2.9) rounds to 3 places,
+    before rounding x (e.g. round(v, 2.9) rounds to 3 places in R, while
     round(v, 2.1) rounds to 2 places).
     """
     x = np.asarray(x, dtype=np.float64)
@@ -45,14 +44,12 @@ def pkuonen(x, lam):
     Known, small, explainable difference from R: this root-finds the same
     equation R's uniroot(..., tol=1e-8) solves, but via scipy.optimize.brentq
     (xtol=1e-8). Both use a Brent-type algorithm at matching nominal
-    tolerance, but are different implementations, and validation against R
-    on two real triggering cases showed ~2-5e-7 relative
-    difference in the extreme tail (Qq ~ 1e-13 to 1e-39) -- not bit-identical
-    the way the vendored Davies call is, but immaterial at that p-value
-    scale. Unlike Davies, this was not ported from R's literal source (no
-    vendored uniroot C code was available to call), so this is the one
-    piece of the p-value chain that is a faithful re-derivation rather than
-    the identical compiled algorithm.
+    tolerance, but are different implementations -- not bit-identical
+    the way the vendored Davies call is, though immaterial at the p-value
+    scale this is used at. Unlike Davies, this was not ported from R's
+    literal source (no vendored uniroot C code was available to call), so
+    this is the one piece of the p-value chain that is a faithful
+    re-derivation rather than the identical compiled algorithm.
     """
     lam = np.asarray(lam, dtype=np.float64)
     nz = lam != 0
@@ -154,11 +151,11 @@ def calc_pval(q, lam):
         if (all(lambda < 0)) pv <- 0
     R's try() catches ANY error raised inside .Q_pval (including ones from
     an uncaught failure deep in .pKuonen's uniroot call) and turns it into
-    NA, not a crash. This was found by testing: a pathological lambda
-    vector made R's own .pKuonen fail with an uncaught error too (verified
-    directly against R), and R's calc_pval silently returns NA for it.
-    SciPy's brentq raises an exception on the equivalent failure rather
-    than returning NaN, so that exception must be caught here the same way.
+    NA, not a crash: a pathological lambda vector can make R's own
+    .pKuonen fail with an uncaught error too, and R's calc_pval silently
+    returns NA for it. SciPy's brentq raises an exception on the
+    equivalent failure rather than returning NaN, so that exception must
+    be caught here the same way.
     """
     try:
         pval = q_pval(q, lam)

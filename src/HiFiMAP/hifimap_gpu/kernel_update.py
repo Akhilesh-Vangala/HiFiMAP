@@ -62,28 +62,20 @@ def q_and_eigen(K_subj, residuals, random_vectors):
 # ---------------------------------------------------------------------------
 # Fast variants: mathematically equivalent reformulations of build_P_proj's
 # projection and q_and_eigen, exploiting structure that the generic
-# implementations above don't. Profiled directly against real chr22 data
-# (not guessed): the generic sparse-sparse matmul in project_and_halve and
-# the LIL-based diagonal halving cost far more than the actual amount of
-# data involved justifies, especially for a per-site delta update (which
-# typically touches only a handful of haplotype pairs); q_and_eigen's dense
-# (B,N)@(N,B) GEMM does the same -- it multiplies by every one of the N
-# rows of random_vectors even though almost all of them are provably zero
-# for a sparse delta.
+# implementations above don't use. The generic sparse-sparse matmul in
+# project_and_halve and the LIL-based diagonal halving cost more than the
+# actual amount of data involved justifies, especially for a per-site delta
+# update (which typically touches only a handful of haplotype pairs);
+# q_and_eigen's dense (B,N)@(N,B) GEMM does the same -- it multiplies by
+# every one of the N rows of random_vectors even though almost all of them
+# are provably zero for a sparse delta.
 #
-# Validated on 20,000 real chr22 sites: 12.3x end-to-end speedup, 0
-# n.ibd.segs/position mismatches, 0 final p-value differences, run fully
-# standalone against the already-validated reference implementations above.
 # project_and_halve_fast is bit-identical to project_and_halve (pure
 # algebraic reindexing, no reassociated floating point). q_and_eigen_fast
-# is NOT bit-identical to q_and_eigen (summing the same real terms in a
+# is not bit-identical to q_and_eigen (summing the same real terms in a
 # different order via a smaller GEMM is a valid but different
-# floating-point rounding, same category as the documented
-# uniroot-vs-brentq gap in pvalue.py) -- the difference is ~1e-14 to 1e-15
-# in E, far below the pipeline's own zapsmall(digits=7) rounding and the
-# 5e-8 text-rounding tolerance already established as the project's
-# acceptance bar, and it produced zero different final p-values across
-# 20,000 real sites.
+# floating-point rounding), though the difference is far below the
+# pipeline's own zapsmall(digits=7) rounding.
 # ---------------------------------------------------------------------------
 
 def build_inverse_map(match_idx, n_vcf):
@@ -141,10 +133,9 @@ def q_and_eigen_fast(K_subj, residuals, random_vectors):
     random_vectors[nz_rows].T @ (K_subj[nz_rows] @ random_vectors) -- the
     same sum, restricted to terms that aren't already known to be zero.
     For a typical per-site delta this cuts the dense GEMM's contraction
-    dimension from N (5000 in the validated case) down to a handful of
-    rows (median 9, mean ~21 across 20,000 real chr22 sites), since
-    N x B GEMM throughput on CPU doesn't scale down proportionally with
-    nnz the way a sparse-aware computation does.
+    dimension from N down to a handful of rows, since N x B GEMM
+    throughput on CPU doesn't scale down proportionally with nnz the way
+    a sparse-aware computation does.
     """
     Kr = K_subj @ residuals
     Q = float(residuals @ Kr)

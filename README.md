@@ -4,11 +4,11 @@ High resolution fast identity-by-descent (IBD) mapping test
 Current version: 2.1.0 (adds a Python/GPU implementation of Step 2; see [version history](#version-history))
 
 ## Overview
-The new HiFiMAP pipeline has been rebuilt for scalability and efficiency. It uses a highly optimized Python preparser to convert IBD segments into chunked sparse matrices (`.mtx`) and differential updates (`.diff`). Step 2, the per-position association scan, has two implementations that read the same inputs and produce the same output: the original R program, which utilizes C++ (`Rcpp`) to stream these updates across parallelized CPU processes, and a Python implementation that batches the same streaming update into GPU (or CPU) eigendecomposition calls. Both avoid frequently loading massive IBD matrices into RAM.
+The new HiFiMAP pipeline has been rebuilt for scalability and efficiency. It uses a highly optimized Python preparser to convert IBD segments into chunked sparse matrices (`.mtx`) and differential updates (`.diff`). The main R program utilizes C++ (`Rcpp`) to stream these updates, allowing for fast, parallelized genome-wide association testing without frequently loading massive IBD matrices into RAM.
 
 ## Workflow
 
-<img src="docs/workflow.svg" alt="HiFiMAP pipeline: Step 0 parses IBD segments in Python, Step 1 fits the null model in R, then Step 2 runs as either the R scan or the Python/GPU scan, both producing identical p-values." width="100%" />
+<img src="docs/workflow.svg" alt="HiFiMAP pipeline: Step 0 parses IBD segments in Python, Step 1 fits the null model in R, then Step 2 runs as either the R scan or the Python/GPU scan, producing the same output format." width="100%" />
 
 ## Quick Installation 
 
@@ -215,10 +215,7 @@ The p-values are computed with simulated random vectors from Step 1. They theref
 `Step2_Run_HiFiMAP.R`: it batches the whole chromosome into one (or a few)
 eigendecomposition calls instead of chunking across CPU processes, and runs
 on a GPU automatically when one is available. It reads the same Step 0 and
-Step 1 outputs and writes the same `chr  pos  n.ibd.segs  p.value` format,
-matching the R implementation exactly on chr2 and chr18–22 (0 position or
-`n.ibd.segs` mismatches; p-values match to this file's own display
-rounding).
+Step 1 outputs and writes the same `chr  pos  n.ibd.segs  p.value` format.
 
 **One-time setup, per machine:**
 ```bash

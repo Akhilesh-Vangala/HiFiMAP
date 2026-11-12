@@ -2,34 +2,22 @@
 in kernel_update.py (project_and_halve_fast + q_and_eigen_fast + n_ibd_from,
 called once per site with a diff).
 
-Why this exists: an earlier whole-chromosome timing benchmark found the
-per-site bookkeeping loop was 78% of total pipeline time, with GPU-batched
-eigh only addressing the other 17%. Profiling that loop found the real
-cost wasn't the linear algebra itself (the actual math per site is
-trivial -- a handful of nonzero entries) but fixed Python/scipy
-object-construction overhead paid 254,145 times: once per site, even for
-sites with no diff (tar lookup), and separately for every scipy sparse
-matrix built per fired site.
+Why this exists: the per-site bookkeeping loop's real cost isn't the
+linear algebra itself (the actual math per site is trivial -- a handful
+of nonzero entries) but fixed Python/scipy object-construction overhead
+paid once per site, even for sites with no diff (tar lookup), and
+separately for every scipy sparse matrix built per fired site.
 
 This module eliminates nearly all of that per-site overhead by:
 1. Parsing every diff file's content in ONE pass (bulk_parse_all_diffs),
-   instead of one `tarfile.extractfile()` + text-parse call per site --
-   validated 9.68x faster than the per-site reader, exact match on the
-   full chromosome.
+   instead of one `tarfile.extractfile()` + text-parse call per site.
 2. Computing each site's (dQ, dE, n_ibd delta) using small PLAIN NUMPY
    arrays local to just that site's actually-touched subjects (typically
    ~9-21 of N~5000), instead of general-purpose scipy sparse matrix
    objects sized (N, N). scipy's sparse matrix classes carry real
    fixed per-object overhead (shape validation, dtype resolution,
    index-array construction) that dominates when the matrices are this
-   tiny -- profiling showed `numpy.ravel`, called from inside scipy's
-   coo_matrix/tocsr machinery, alone cost 40% of the loop's time.
-   Validated 11.02x faster than the original per-site scipy-sparse loop,
-   54,651 of 54,661 sites bit-identical, remaining differences ~1.7e-13
-   (floating-point reassociation, same category as the documented
-   q_and_eigen_fast row-restriction gap in kernel_update.py -- far below
-   this project's established 5e-8/1e-7 tolerance, and verified to
-   change zero final reported p-values in the full pipeline).
+   tiny.
 
 Each site's own delta here depends on nothing but that site's own diff
 data (and the fixed, precomputed inv_map/residuals/random_vectors) --
@@ -38,8 +26,7 @@ chromosome-wide Q_curr/E_curr trajectory is a cumulative sum (prefix sum)
 of these independent per-site deltas; building it via np.cumsum over the
 SAME site order as the original sequential `+=` loop reproduces the
 identical summation order, so it is bit-identical to the sequential
-accumulation wherever the per-site deltas themselves are bit-identical,
-and differs only by the same ~1e-13 noise where they don't.
+accumulation wherever the per-site deltas themselves are bit-identical.
 """
 import io
 
@@ -47,16 +34,14 @@ import numpy as np
 import pandas as pd
 
 # Above this many touched subjects at one site, build M as a sparse
-# matrix instead of the dense (k,k) array the typical site (median ~7,
-# mean ~15-21) uses. Found by direct inspection of real chr21/chr22 data:
-# touched-per-site is almost always small, but a rare site (e.g. chr21's
-# last site, where every segment still active gets force-closed at once)
-# can have k in the thousands while the actual nonzero update count stays
-# in the same thousands -- i.e. the dense (k,k) matrix at that site would
-# be >99.9% zero. This threshold is well above the real non-pathological
-# tail observed (chr21/chr22's largest ordinary sites: 736/706) and well
-# below the pathological ones seen (7940/8045), so it only engages for
-# the rare case, never for a typical fired site.
+# matrix instead of the dense (k,k) array a typical site uses.
+# Touched-per-site is almost always small, but a rare site (e.g. a
+# chromosome's last site, where every segment still active gets
+# force-closed at once) can have k in the thousands while the actual
+# nonzero update count stays in the same thousands -- i.e. the dense
+# (k,k) matrix at that site would be mostly zero. This threshold sits
+# above the typical case and below the pathological one, so it only
+# engages for the rare case, never for a typical fired site.
 SPARSE_FALLBACK_THRESHOLD = 2000
 
 
@@ -68,13 +53,11 @@ def bulk_parse_all_diffs(tar_path, members):
 
     members: pre-built list of TarInfo (from ibd_io.open_diff_tar's
     index) -- building that index (one scan of the tar's headers) is a
-    shared ~1.3s fixed cost paid once regardless of which reader is used
+    shared fixed cost paid once regardless of which reader is used
     afterward, so it's passed in rather than rebuilt here.
 
     Returns (site_id, op, h1, h2) as four flat numpy arrays, one row per
-    diff line across the whole chromosome. Validated via direct
-    comparison against ibd_io.read_diff_as_dK_from_tar's per-site
-    reading: exact match on all lines, full chr22 chromosome.
+    diff line across the whole chromosome.
     """
     with open(tar_path, "rb") as f:
         raw = f.read()
@@ -165,17 +148,13 @@ def compute_all_site_deltas(site_id, op, h1, h2, inv_map, N, residuals, random_v
     # group_site_ids is already ascending (site_s was sorted above), so
     # writing into preallocated arrays in this loop's order produces
     # site-sorted arrays directly -- no dict, and no second pass to pull
-    # values back out of one afterward (that reconstruction pass, found by
-    # direct profiling, was itself a meaningful share of the calling
-    # code's time: the same per-site-Python-overhead pattern this module
-    # exists to eliminate, just one level up). Preallocating dE_arr at its
-    # upper-bound size (len(starts), every site has at least one group
-    # whether or not it ends up firing) and writing each site's dE
-    # directly into it avoids ever holding ~54,660 individual (B,B)
-    # arrays in a Python list AND a second, separately-allocated stacked
-    # copy of the same ~4.4GB of data at the same time -- that double
-    # allocation was the single largest in-function contributor to the
-    # whole pipeline's peak memory.
+    # values back out of one afterward (the same per-site-Python-overhead
+    # pattern this module exists to eliminate, just one level up).
+    # Preallocating dE_arr at its upper-bound size (len(starts), every
+    # site has at least one group whether or not it ends up firing) and
+    # writing each site's dE directly into it avoids ever holding every
+    # individual (B,B) array in a Python list AND a second, separately-
+    # allocated stacked copy of the same data at the same time.
     B = random_vectors.shape[1]
     max_fired = len(starts)
     fired_arr = np.empty(max_fired, dtype=np.int64)
@@ -207,11 +186,9 @@ def compute_all_site_deltas(site_id, op, h1, h2, inv_map, N, residuals, random_v
             # (B,B) accumulator, never building a (k,k) intermediate at
             # all. Vectorized equivalent here: accumulate each line's
             # rank-1-ish contribution directly via one (B,n_lines)@(n_lines,B)
-            # matmul, holding only (n_lines, B) arrays -- for chr21's
-            # worst real site (k=7940, ~29,388 symmetrized lines, B=100)
-            # that's ~23MB, vs ~504MB for the dense (k,k) array this
-            # replaces, and smaller still than a sparse (k,k) matrix's own
-            # index/data arrays.
+            # matmul, holding only (n_lines, B) arrays, much smaller than
+            # the dense (k,k) array this replaces, or a sparse (k,k)
+            # matrix's own index/data arrays.
             rows_sym = np.concatenate([local_rows, local_cols])
             cols_sym = np.concatenate([local_cols, local_rows])
             vals_sym = np.concatenate([vals, vals])
